@@ -1,0 +1,21 @@
+# Rust
+target/
+Cargo.lock
+services/
+
+# Generated files
+services/
+
+# TypeScript/JavaScript
+**/*.ts
+**/*.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+*.log
