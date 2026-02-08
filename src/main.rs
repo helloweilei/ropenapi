@@ -29,6 +29,6 @@ fn main() -> Result<()> {
 
     generator::write_services(&out_dir, &services, &args)?;
 
-    println!("✓ Generated services in {}/services", out_dir.display());
+    println!("✓ Generated services in {}", out_dir.display());
     Ok(())
 }
