@@ -1,5 +1,6 @@
 use anyhow::{ Context, Result };
-use std::fs;
+use std::fs::{ self, OpenOptions };
+use std::io::Write;
 use std::path::Path;
 
 use crate::models::Service;
@@ -32,16 +33,13 @@ fn write_service(
     request_lib: &str,
     api_prefix: &str
 ) -> Result<()> {
-    let service_dir = services_root.join(&service.name);
-    ensure_dir(&service_dir)?;
-
-    let service_name = if service.name.to_lowercase().ends_with("swagger") {
+    let service_name = if service.name.to_lowercase().ends_with("Controller") {
         service.name.clone()
     } else {
-        format!("{}Swagger", capitalize(&service.name))
+        format!("{}Controller", capitalize(&service.name))
     };
 
-    let file_path = service_dir.join(format!("{}.ts", service_name));
+    let file_path = services_root.join(format!("{}.ts", service_name));
 
     write_service_to_file(&file_path, service, request_lib, api_prefix)?;
 
@@ -80,7 +78,9 @@ fn write_api_file_with_request_lib(
     let mut content = String::new();
 
     // Add header with imports
+    content.push_str("// @ts-expect-error\n");
     content.push_str(request_lib);
+    content.push_str("\n\n");
     // content.push_str("import * as Types from './types';\n");
     // content.push_str("import type { IResponse } from '@/types';\n\n");
 
@@ -135,9 +135,13 @@ fn write_types_file(path: &Path, service: &Service) -> Result<()> {
     // Trim trailing whitespace
     let content = content.trim_end().to_string() + "\n";
 
-    fs
-        ::write(path, &content)
-        .with_context(|| format!("Failed to write types file: {}", path.display()))?;
+    if path.exists() {
+        OpenOptions::new().append(true).open(path)?.write_all(content.as_bytes())?;
+    } else {
+        fs
+            ::write(path, &content)
+            .with_context(|| format!("Failed to write types file: {}", path.display()))?;
+    }
 
     Ok(())
 }

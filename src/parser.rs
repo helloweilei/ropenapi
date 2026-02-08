@@ -238,31 +238,41 @@ fn extract_types(operation: &Value, service: &mut Service) -> (String, String) {
 
     //解析parameters的每一个param, 构建新的对象
     if request_type == "any" {
-        let type_name = format!("{}Request", service.name);
-        let mut custom_type = TypeDefinition {
-            name: type_name.clone(),
-            fields: BTreeMap::new(),
-            description: None,
-        };
-        for param in operation
+        let params = operation
             .get("parameters")
             .and_then(|v| v.as_array())
-            .unwrap_or(&Vec::new()) {
-            if let Some(field_name) = param.get("name").and_then(|v| v.as_str()) {
-                if let Some(field_type) = param.get("type").and_then(|v| v.as_str()) {
-                    custom_type.fields.insert(field_name.to_string(), FieldData {
-                        field_type: field_type.to_string(),
-                        optional: param
-                            .get("required")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(true),
-                        description: None,
-                    });
+            .map(|v| v.to_owned())
+            .unwrap_or(vec![]);
+        if !params.is_empty() {
+            let type_name = format!("{}Request", capitalize_first(&service.name));
+            let mut custom_type = TypeDefinition {
+                name: type_name.clone(),
+                fields: BTreeMap::new(),
+                description: None,
+            };
+            for param in params {
+                if let Some(field_name) = param.get("name").and_then(|v| v.as_str()) {
+                    if let Some(field_type) = param.get("type").and_then(|v| v.as_str()) {
+                        let js_type = match field_type {
+                            "string" => "string",
+                            "integer" | "number" | "float" | "double" => "number",
+                            "boolean" => "boolean",
+                            _ => "any",
+                        };
+                        custom_type.fields.insert(field_name.to_string(), FieldData {
+                            field_type: js_type.to_string(),
+                            optional: param
+                                .get("required")
+                                .and_then(|v| v.as_bool().map(|b| !b))
+                                .unwrap_or(true),
+                            description: None,
+                        });
+                    }
                 }
             }
+            request_type = type_name.clone();
+            service.type_definitions.insert(type_name.clone(), custom_type);
         }
-        request_type = type_name.clone();
-        service.type_definitions.insert(type_name.clone(), custom_type);
     }
 
     // Extract response type
@@ -322,14 +332,21 @@ fn extract_type_definition(name: &str, schema: &Value) -> Result<TypeDefinition>
     let mut fields = BTreeMap::new();
 
     if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        let required_fields = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|v| v.to_owned())
+            .unwrap_or(vec![]);
+        let required_fields_set: HashSet<String> = required_fields
+            .iter()
+            .map(|v| v.as_str())
+            .map(|v| v.expect("required field is not a string").to_string())
+            .collect();
         for (field_name, field_schema) in props.iter() {
             let field_type = extract_type_name_from_schema(field_schema);
             fields.insert(field_name.clone(), FieldData {
                 field_type,
-                optional: field_schema
-                    .get("required")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true),
+                optional: !required_fields_set.contains(field_name.as_str()),
                 description: None,
             });
         }

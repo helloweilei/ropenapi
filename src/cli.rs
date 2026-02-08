@@ -17,17 +17,17 @@ pub struct Args {
     pub out: Option<String>,
 
     /// Service path, alias for output directory
-    #[arg(short, long)]
+    #[arg(long)]
     pub service_path: Option<String>,
 
     /// Optional comma-separated tags to generate (services). If omitted, all tags are generated.
     #[arg(short, long)]
     pub tags: Option<String>,
     /// Request lib path to import in generated services, e.g., 'import { request} from @/utils/request'
-    #[arg(short, long, default_value = "import { request } from '@/utils/request'")]
+    #[arg(short, long, default_value = "import { request } from '@/services/request';")]
     pub request_lib_path: Option<String>,
     /// Project name, used for service folder name
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "project-swagger")]
     pub project_name: Option<String>,
     /// Api prefix, prefix of all api urls, eg. /api
     #[arg(short, long)]
