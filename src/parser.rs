@@ -5,11 +5,21 @@ use std::fs;
 
 use crate::models::{ ApiOperation, FieldData, Service, TypeDefinition };
 
-/// Read and parse swagger JSON file
+/// Read and parse swagger JSON file (supports local file and remote URL)
 pub fn read_swagger_file(path: &str) -> Result<Value> {
-    let content = fs
-        ::read_to_string(path)
-        .with_context(|| format!("Failed to read swagger file: {}", path))?;
+    let content = if path.starts_with("http://") || path.starts_with("https://") {
+        // Fetch from remote URL using synchronous HTTP request
+        ureq::get(path)
+            .call()
+            .with_context(|| format!("Failed to fetch swagger from URL: {}", path))?
+            .into_string()
+            .with_context(|| format!("Failed to read response from URL: {}", path))?
+    } else {
+        // Read from local file
+        fs::read_to_string(path)
+            .with_context(|| format!("Failed to read swagger file: {}", path))?
+    };
+
     serde_json::from_str(&content).context("Invalid JSON in swagger file")
 }
 

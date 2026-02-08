@@ -2,7 +2,6 @@ mod cli;
 mod models;
 mod parser;
 mod generator;
-mod utils;
 
 use anyhow::Result;
 use std::collections::HashSet;
