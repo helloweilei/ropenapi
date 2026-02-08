@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::{ BTreeMap, HashSet };
 use std::fs;
 
-use crate::models::{ ApiOperation, Service, TypeDefinition };
+use crate::models::{ ApiOperation, FieldData, Service, TypeDefinition };
 
 /// Read and parse swagger JSON file
 pub fn read_swagger_file(path: &str) -> Result<Value> {
@@ -39,22 +39,23 @@ pub fn parse_swagger(
                 let tag_normalized = normalize_tag(&tag_name);
 
                 // Apply tag filter if provided
-                if let Some(ref filters) = tag_filters {
+                // if let Some(ref filters) = tag_filters {
+                // 现代写法
+                if let Some(filters) = &tag_filters {
                     if !filters.contains(&tag_normalized) {
                         continue;
                     }
                 }
 
-                let api_op = parse_operation(operation, path, method, &schemas_root)?;
+                let api_op = parse_operation(
+                    operation,
+                    path,
+                    method,
+                    get_service(&mut service_map, &tag_normalized),
+                    &schemas_root
+                )?;
 
-                service_map
-                    .entry(tag_normalized.clone())
-                    .or_insert_with(|| Service {
-                        name: tag_normalized.clone(),
-                        operations: Vec::new(),
-                        type_definitions: BTreeMap::new(),
-                    })
-                    .operations.push(api_op);
+                get_service(&mut service_map, &tag_normalized).operations.push(api_op);
             }
         }
     }
@@ -77,6 +78,13 @@ pub fn parse_swagger(
     Ok(service_map.into_values().collect())
 }
 
+fn get_service<'a>(service_map: &'a mut BTreeMap<String, Service>, name: &str) -> &'a mut Service {
+    service_map.entry(name.to_string()).or_insert_with(|| Service {
+        name: name.to_string(),
+        operations: Vec::new(),
+        type_definitions: BTreeMap::new(),
+    })
+}
 /// Find schemas in either Swagger 2.0 or OpenAPI 3.0 format
 fn find_schemas(swagger: &Value) -> Option<Value> {
     if let Some(defs) = swagger.get("definitions") {
@@ -120,10 +128,11 @@ fn parse_operation(
     operation: &Value,
     path: &str,
     method: &str,
+    service: &mut Service,
     _schemas: &Option<Value>
 ) -> Result<ApiOperation> {
     let function_name = extract_function_name(operation, method, path);
-    let (request_type, response_type) = extract_types(operation);
+    let (request_type, response_type) = extract_types(operation, service);
     let operation_id = operation
         .get("operationId")
         .and_then(|v| v.as_str())
@@ -150,17 +159,31 @@ fn extract_function_name(operation: &Value, method: &str, path: &str) -> String 
     generate_function_name(method, path)
 }
 
+static METHOD_OP_MAP: [(&str, &str); 7] = [
+    ("get", "Get"),
+    ("post", "Create"),
+    ("put", "Update"),
+    ("delete", "Delete"),
+    ("patch", "Patch"),
+    ("head", "Head"),
+    ("options", "Options"),
+];
+
 /// Generate camelCase function name from HTTP method and path
 fn generate_function_name(method: &str, path: &str) -> String {
     let method_lower = method.to_lowercase();
-    let path_clean = path.replace('/', " ").replace('{', "").replace('}', "");
+    let path_clean = path.replace('/', " ").replace('{', " by ").replace('}', "");
 
     let parts: Vec<_> = path_clean
         .split_whitespace()
         .filter(|s| !s.is_empty())
         .collect();
 
-    let mut result = method_lower.clone();
+    let mut result = METHOD_OP_MAP.iter()
+        .find(|&&(m, _)| m == method_lower)
+        .map(|&(_, op)| op)
+        .unwrap_or("")
+        .to_string();
 
     for part in parts {
         let capitalized = capitalize_first(part);
@@ -177,7 +200,7 @@ fn capitalize_first(s: &str) -> String {
         None => String::new(),
         Some(first) => {
             let mut result = String::new();
-            result.push_str(&first.to_uppercase().to_string());
+            result.push_str(&first.to_uppercase().collect::<String>());
             result.push_str(chars.as_str());
             result
         }
@@ -185,11 +208,11 @@ fn capitalize_first(s: &str) -> String {
 }
 
 /// Extract request and response types from operation
-fn extract_types(operation: &Value) -> (String, String) {
+fn extract_types(operation: &Value, service: &mut Service) -> (String, String) {
     let mut request_type = String::from("any");
     let mut response_type = String::from("any");
 
-    // Extract request type from parameters or requestBody
+    // Extract request type from parameters（2.0） or requestBody（3.0）
     if let Some(params) = operation.get("parameters").and_then(|v| v.as_array()) {
         for param in params {
             if let Some(schema) = param.get("schema") {
@@ -213,10 +236,40 @@ fn extract_types(operation: &Value) -> (String, String) {
         }
     }
 
+    //解析parameters的每一个param, 构建新的对象
+    if request_type == "any" {
+        let type_name = format!("{}Request", service.name);
+        let mut custom_type = TypeDefinition {
+            name: type_name.clone(),
+            fields: BTreeMap::new(),
+            description: None,
+        };
+        for param in operation
+            .get("parameters")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&Vec::new()) {
+            if let Some(field_name) = param.get("name").and_then(|v| v.as_str()) {
+                if let Some(field_type) = param.get("type").and_then(|v| v.as_str()) {
+                    custom_type.fields.insert(field_name.to_string(), FieldData {
+                        field_type: field_type.to_string(),
+                        optional: param
+                            .get("required")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true),
+                        description: None,
+                    });
+                }
+            }
+        }
+        request_type = type_name.clone();
+        service.type_definitions.insert(type_name.clone(), custom_type);
+    }
+
     // Extract response type
     if let Some(responses) = operation.get("responses").and_then(|v| v.as_object()) {
         let response_schema = responses
             .get("200")
+            .or_else(|| responses.get("201"))
             .or_else(|| responses.get("default"))
             .or_else(|| responses.values().next());
 
@@ -248,7 +301,7 @@ fn extract_type_name_from_schema(schema: &Value) -> String {
     if let Some(type_str) = schema.get("type").and_then(|v| v.as_str()) {
         match type_str {
             "string" => "string".to_string(),
-            "integer" | "number" => "number".to_string(),
+            "integer" | "number" | "float" | "double" => "number".to_string(),
             "boolean" => "boolean".to_string(),
             "array" => {
                 if let Some(items) = schema.get("items") {
@@ -271,7 +324,14 @@ fn extract_type_definition(name: &str, schema: &Value) -> Result<TypeDefinition>
     if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
         for (field_name, field_schema) in props.iter() {
             let field_type = extract_type_name_from_schema(field_schema);
-            fields.insert(field_name.clone(), field_type);
+            fields.insert(field_name.clone(), FieldData {
+                field_type,
+                optional: field_schema
+                    .get("required")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                description: None,
+            });
         }
     }
 
